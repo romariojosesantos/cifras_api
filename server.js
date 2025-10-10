@@ -15,10 +15,16 @@ async function startBrowser() {
   if (!browserInstance) {
     console.log('[BROWSERLESS] Conectando a uma instância remota...');
 
+    const apiKey = process.env.BROWSERLESS_API_KEY;
+
+    if (!apiKey) {
+      throw new Error('A variável de ambiente BROWSERLESS_API_KEY não está definida.');
+    }
+
     // Conecta-se a uma instância do Browserless.io
     // A chave de API é passada via variável de ambiente.
     browserInstance = await puppeteer.connect({
-      browserWSEndpoint: `wss://chrome.browserless.io?token=${process.env.BROWSERLESS_API_KEY}`,
+      browserWSEndpoint: `wss://chrome.browserless.io?token=${apiKey}`,
     });
   }
   return browserInstance;
