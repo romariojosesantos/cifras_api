@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/cifras_api/package.json",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": ["server.js"]
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/api/cifras_api/server.js"
+    }
+  ]
+}
