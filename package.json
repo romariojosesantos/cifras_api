@@ -1,10 +1,11 @@
 {
-  "name": "cifraclub-scraper-api",
+  "name": "cifraclub-scraper-api-root",
   "version": "1.0.0",
+  "private": true,
   "description": "API para buscar cifras no Cifra Club",
-  "main": "server.js",
+  "main": "api/cifras_api/server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node api/cifras_api/server.js"
   },
   "dependencies": {
     "@sparticuz/chromium": "^123.0.1",
