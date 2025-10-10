@@ -29,7 +29,7 @@ app.get('/api/search', async (req, res) => {
       throw new Error('As variáveis de ambiente GOOGLE_API_KEY e SEARCH_ENGINE_ID não foram configuradas.');
     }
 
-    const apiUrl = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${searchEngineId}&q=${encodeURIComponent(query)}&num=5`;
+    const apiUrl = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${searchEngineId}&q=${encodeURIComponent(query)}&num=10`;
     console.log(`[DEBUG] Buscando na API do Google: ${apiUrl}`);
 
     const apiResponse = await fetch(apiUrl); // Renomeado para evitar conflito
