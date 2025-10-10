@@ -1,43 +1,13 @@
+// Carrega as variáveis de ambiente do arquivo .env
+require('dotenv').config();
+
 const express = require('express');
 const cheerio = require('cheerio');
 const cors = require('cors');
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('puppeteer');
 
 const app = express();
 const PORT = process.env.PORT || 3001; // Mantido para desenvolvimento local
-
-// --- Otimização: Gerenciamento da instância do Puppeteer ---
-// Variável para armazenar a instância global do navegador
-let browserInstance;
-
-// Função para iniciar o Puppeteer e retornar a instância do navegador
-async function startBrowser() {
-  if (!browserInstance) {
-    console.log('[BROWSERLESS] Conectando a uma instância remota...');
-
-    const apiKey = process.env.BROWSERLESS_API_KEY;
-
-    if (!apiKey) {
-      throw new Error('A variável de ambiente BROWSERLESS_API_KEY não está definida.');
-    }
-
-    // Conecta-se a uma instância do Browserless.io
-    // A chave de API é passada via variável de ambiente.
-    browserInstance = await puppeteer.connect({
-      browserWSEndpoint: `wss://chrome.browserless.io?token=${apiKey}&stealth`,
-    });
-  }
-  return browserInstance;
-}
-
-// Função para fechar o navegador de forma graciosa
-async function closeBrowser() {
-  if (browserInstance) {
-    console.log('[PUPPETEER] Fechando a instância do navegador...');
-    await browserInstance.close();
-    browserInstance = null; // Limpa a instância
-  }
-}
 
 // Habilita o CORS para permitir requisições do seu frontend
 app.use(cors());
@@ -49,14 +19,34 @@ app.get('/api/search', async (req, res) => {
     return res.status(400).json({ error: 'O parâmetro de busca "q" é obrigatório.' });
   }
 
+  let browser;
   let page;
   try {
     const searchUrl = `https://www.cifraclub.com.br/?q=${encodeURIComponent(query)}`;
     console.log(`[DEBUG] Buscando na URL: ${searchUrl}`);
 
-    // Reutiliza a instância do navegador e cria apenas uma nova página
-    const browser = await startBrowser();
+    console.log('[PUPPETEER] Iniciando uma nova instância do navegador...');
+    browser = await puppeteer.launch({
+      headless: true, // Garante que rode em modo headless no servidor
+      args: [
+        '--no-sandbox', // Essencial para rodar em ambientes Linux/Docker
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage', // Evita problemas de memória compartilhada
+        '--disable-gpu' // Desnecessário em modo headless
+      ]
+    });
+
+    console.log('[PUPPETEER] Abrindo nova página...');
     page = await browser.newPage();
+    // Otimização: Bloqueia o carregamento de recursos desnecessários (imagens, css, fontes)
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
 
     // Navega para a URL e espera a página carregar completamente
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded' });
@@ -119,6 +109,9 @@ app.get('/api/search', async (req, res) => {
     if (page) {
       await page.close();
     }
+    if (browser) {
+      await browser.close();
+    }
   }
 });
 
@@ -138,13 +131,32 @@ app.get('/api/scrape', async (req, res) => {
     return res.status(400).json({ error: 'A URL fornecida não é do Cifra Club.' });
   }
 
+  let browser;
   let page;
   try {
     console.log(`[DEBUG] Raspando conteúdo da URL: ${url}`);
 
-    // Reutiliza a instância do navegador
-    const browser = await startBrowser();
+    console.log('[PUPPETEER] Iniciando uma nova instância do navegador...');
+    browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu'
+      ]
+    });
+
+    console.log('[PUPPETEER] Abrindo nova página...');
     page = await browser.newPage();
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
 
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     console.log('[DEBUG] Página da cifra carregada.');
@@ -193,21 +205,16 @@ app.get('/api/scrape', async (req, res) => {
     if (page) {
       await page.close();
     }
+    if (browser) {
+      await browser.close();
+    }
   }
 });
 
 // Se não estiver no ambiente da Vercel, inicie o servidor localmente
 if (process.env.VERCEL_ENV !== 'production') {
-  const server = app.listen(PORT, () => {
-    // Não precisamos mais iniciar o navegador localmente
+  app.listen(PORT, () => {
     console.log(`Servidor da API rodando na porta ${PORT}`);
-  });
-
-  // --- Tratamento para desligamento gracioso (local) ---
-  process.on('SIGINT', async () => {
-    await closeBrowser();
-    server.close(() => console.log('Servidor encerrado.'));
-    process.exit(0);
   });
 }
 
