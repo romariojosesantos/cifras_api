@@ -1,41 +1,11 @@
 # Dependencies
-# Ignora a pasta que armazena todos os pacotes do Node.js.
-# Essa pasta é recriada com 'npm install' ou 'yarn install'.
 /node_modules
 
-# Logs
-# Ignora arquivos de log que podem conter informações sensíveis ou que são específicos do ambiente.
-logs
-*.log
-npm-debug.log*
-yarn-error.log*
-yarn-debug.log*
-lerna-debug.log*
-
 # Environment variables
-# Arquivos de ambiente contêm chaves de API e outras informações secretas.
-# Eles nunca devem ser versionados.
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
 
-# IDEs and editors
-# Arquivos de configuração específicos do seu editor de código.
-.idea/
-.vscode/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+# Lockfiles - To prevent conflicts on the server
+package-lock.json
 
-# Build output
-# Pastas de saída de builds, que são geradas automaticamente.
-/dist
-/build
-
-# Vercel
-# Pasta de configuração e build da Vercel.
-.vercel
+# Log files
+*.log
