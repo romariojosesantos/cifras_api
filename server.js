@@ -68,7 +68,7 @@ app.get('/api/search', async (req, res) => {
 
   } catch (error) {
     console.error('Erro ao fazer a busca:', error);
-    res.status(500).json({ error: 'Ocorreu um erro ao buscar os resultados.' });
+    res.status(500).json({ error: 'Ocorreu um erro ao buscar os resultados.', details: error.message });
   }
 });
 
@@ -134,7 +134,7 @@ app.get('/api/scrape', async (req, res) => {
 
   } catch (error) {
     console.error('Erro ao raspar a página da cifra:', error);
-    res.status(500).json({ error: 'Ocorreu um erro ao obter o conteúdo da cifra.' });
+    res.status(500).json({ error: 'Ocorreu um erro ao obter o conteúdo da cifra.', details: error.message });
   }
 });
 
