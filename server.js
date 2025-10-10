@@ -24,7 +24,7 @@ async function startBrowser() {
     // Conecta-se a uma instância do Browserless.io
     // A chave de API é passada via variável de ambiente.
     browserInstance = await puppeteer.connect({
-      browserWSEndpoint: `wss://chrome.browserless.io?token=${apiKey}`,
+      browserWSEndpoint: `wss://chrome.browserless.io?token=${apiKey}&stealth`,
     });
   }
   return browserInstance;
