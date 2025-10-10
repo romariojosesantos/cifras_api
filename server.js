@@ -15,24 +15,15 @@ let browserInstance;
 async function startBrowser() {
   if (!browserInstance) {
     console.log('[PUPPETEER] Iniciando uma nova instância do navegador...');
-    
-    const isProduction = process.env.VERCEL_ENV === 'production';
 
-    const options = {
-      args: isProduction ? chromium.args : ['--no-sandbox', '--disable-setuid-sandbox'],
-      defaultViewport: isProduction ? chromium.defaultViewport : null,
-      executablePath: isProduction ? await chromium.executablePath() : 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      headless: isProduction ? chromium.headless : true, // ou false se quiser ver o navegador localmente
+    // Opções otimizadas para Vercel e desenvolvimento local
+    browserInstance = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
       ignoreHTTPSErrors: true,
-    };
-
-    // Se o executável padrão do Chrome não for encontrado localmente, puppeteer tentará encontrar um.
-    // Isso torna o código mais robusto caso o Chrome não esteja no caminho padrão.
-    if (!isProduction && !require('fs').existsSync(options.executablePath)) {
-      delete options.executablePath;
-    }
-
-    browserInstance = await puppeteer.launch(options);
+    });
   }
   return browserInstance;
 }
