@@ -49,7 +49,7 @@ async function closeBrowser() {
 // Habilita o CORS para permitir requisições do seu frontend
 app.use(cors());
 
-app.get('/search', async (req, res) => {
+app.get('/api/search', async (req, res) => {
   const { q: query } = req.query;
 
   if (!query) {
@@ -129,7 +129,7 @@ app.get('/search', async (req, res) => {
   }
 });
 
-app.get('/scrape', async (req, res) => {
+app.get('/api/scrape', async (req, res) => {
   let { url } = req.query;
 
   if (!url) {
