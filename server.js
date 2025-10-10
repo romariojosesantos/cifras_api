@@ -21,47 +21,34 @@ app.get('/api/search', async (req, res) => {
   }
 
   try {
-    const searchUrl = `https://www.cifraclub.com.br/?q=${encodeURIComponent(query)}`;
-    console.log(`[DEBUG] Buscando na URL: ${searchUrl}`);
+    // --- MUDANÇA: Usar a API do Google Custom Search em vez de raspar o HTML ---
+    const apiKey = process.env.GOOGLE_API_KEY;
+    const searchEngineId = process.env.SEARCH_ENGINE_ID;
 
-    // Otimização: Usar fetch em vez de Puppeteer para a busca
-    const response = await fetch(searchUrl);
-    if (!response.ok) {
-      throw new Error(`Erro ao buscar: ${response.statusText}`);
+    if (!apiKey || !searchEngineId) {
+      throw new Error('As variáveis de ambiente GOOGLE_API_KEY e SEARCH_ENGINE_ID não foram configuradas.');
     }
-    const data = await response.text();
-    const $ = cheerio.load(data);
 
-    const results = [];
-    // O seletor para os resultados da busca mudou ou pode variar. Este é mais genérico.
-    $('a.gsc-a-result').each((index, element) => {
-      if (results.length >= 5) {
-        return false;
-      }
+    const apiUrl = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${searchEngineId}&q=${encodeURIComponent(query)}&num=5`;
+    console.log(`[DEBUG] Buscando na API do Google: ${apiUrl}`);
 
-      console.log(`[DEBUG] Encontrado elemento ${index + 1}`);
-      const linkElement = $(element);
-      
-      // O URL real está no atributo 'data-ctorig'
-      const url = linkElement.attr('data-ctorig');
-      const fullTitle = linkElement
-        .text()
-        .replace(/Cifra Club/gi, '') // Remove a expressão "Cifra Club"
-        .trim();
-
-      console.log(`  [DEBUG] Título: ${fullTitle}, URL: ${url}`);
-      // Adiciona o resultado apenas se tivermos as informações essenciais
-      // Verificamos se o URL é válido e pertence ao Cifra Club
-      if (url && url.includes('cifraclub.com.br') && fullTitle) {
-        results.push({
-          title: fullTitle,
-          url: url
-        });
-      }
-    });
+    const apiResponse = await fetch(apiUrl); // Renomeado para evitar conflito
+    if (!apiResponse.ok) {
+      const errorData = await apiResponse.json();
+      console.error('[ERROR] Erro da API do Google:', errorData);
+      throw new Error(`Erro ao buscar na API do Google: ${apiResponse.statusText}`);
+    }
+    
+    const data = await apiResponse.json();
+    
+    // Mapeia os resultados da API para o formato que nosso frontend espera
+    const results = (data.items || []).map(item => ({
+      title: item.title.replace(/ - Cifra Club$/, '').trim(), // Limpa o título
+      url: item.link
+    }));
 
     if (results.length === 0) {
-      console.log('[DEBUG] Nenhum resultado encontrado com o seletor. Retornando lista vazia.');
+      console.log('[DEBUG] A API do Google não retornou resultados.');
     }
 
     res.json(results);
