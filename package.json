@@ -5,7 +5,8 @@
   "description": "API para buscar cifras no Cifra Club",
   "main": "api/cifras_api/server.js",
   "scripts": {
-    "start": "node api/cifras_api/server.js"
+    "start": "node api/cifras_api/server.js",
+    "build": "echo 'Build step not required for this project.'"
   },
   "dependencies": {
     "@sparticuz/chromium": "^123.0.1",
