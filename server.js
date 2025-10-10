@@ -2,7 +2,6 @@ const express = require('express');
 const cheerio = require('cheerio');
 const cors = require('cors');
 const puppeteer = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium');
 
 const app = express();
 const PORT = process.env.PORT || 3001; // Mantido para desenvolvimento local
@@ -14,15 +13,12 @@ let browserInstance;
 // Função para iniciar o Puppeteer e retornar a instância do navegador
 async function startBrowser() {
   if (!browserInstance) {
-    console.log('[PUPPETEER] Iniciando uma nova instância do navegador...');
+    console.log('[BROWSERLESS] Conectando a uma instância remota...');
 
-    // Opções otimizadas para Vercel e desenvolvimento local
-    browserInstance = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
-      ignoreHTTPSErrors: true,
+    // Conecta-se a uma instância do Browserless.io
+    // A chave de API é passada via variável de ambiente.
+    browserInstance = await puppeteer.connect({
+      browserWSEndpoint: `wss://chrome.browserless.io?token=${process.env.BROWSERLESS_API_KEY}`,
     });
   }
   return browserInstance;
@@ -196,8 +192,8 @@ app.get('/api/scrape', async (req, res) => {
 
 // Se não estiver no ambiente da Vercel, inicie o servidor localmente
 if (process.env.VERCEL_ENV !== 'production') {
-  const server = app.listen(PORT, async () => {
-    await startBrowser(); // Inicia o navegador junto com o servidor
+  const server = app.listen(PORT, () => {
+    // Não precisamos mais iniciar o navegador localmente
     console.log(`Servidor da API rodando na porta ${PORT}`);
   });
 
