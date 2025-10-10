@@ -138,11 +138,11 @@ app.get('/api/scrape', async (req, res) => {
   }
 });
 
-// Se não estiver no ambiente da Vercel, inicie o servidor localmente
-if (process.env.VERCEL_ENV !== 'production') {
-  app.listen(PORT, () => {
-    console.log(`Servidor da API rodando na porta ${PORT}`);
-  });
-}
+// Inicia o servidor.
+// Em ambientes como Vercel, a chamada `listen` é ignorada e o `module.exports` é usado.
+// Em outros ambientes (como Easypanel, Heroku, ou local), o servidor iniciará e ouvirá na porta especificada.
+app.listen(PORT, () => {
+  console.log(`Servidor da API rodando na porta ${PORT}`);
+});
 
 module.exports = app; // Exporta o app para a Vercel
