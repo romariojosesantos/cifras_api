@@ -86,6 +86,15 @@ app.get('/api/scrape', async (req, res) => {
     const html = await response.text();
     const $ = cheerio.load(html);
 
+    // Extrai o ID do vídeo do YouTube, se existir
+    let videoId = null;
+    const iframeSrc = $('iframe[src*="youtube.com/embed/"]').attr('src');
+    if (iframeSrc) {
+      const urlParts = iframeSrc.split('/');
+      // Pega a última parte da URL (o ID) e remove quaisquer parâmetros de query
+      videoId = urlParts[urlParts.length - 1].split('?')[0];
+    }
+
     // 1. Tenta encontrar o conteúdo da cifra (tag <pre>)
     const cifraContent = $('pre').html();
 
@@ -93,12 +102,14 @@ app.get('/api/scrape', async (req, res) => {
       // Se encontrou a cifra, retorna o conteúdo
       const artist = $('h2.t3 a.t1').text();
       const song = $('h1.t1').text();
+      
 
       res.json({
         type: 'cifra',
         artist: artist,
         song: song,
-        content: cifraContent
+        content: cifraContent,
+        videoId: videoId // Adiciona o ID do vídeo à resposta
       });
     } else {
       // 2. Se não encontrou, tenta encontrar uma lista de músicas (página de artista)
