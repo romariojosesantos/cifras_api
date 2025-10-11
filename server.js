@@ -13,6 +13,10 @@ const PORT = process.env.PORT || 3001;
 // Habilita o CORS para permitir requisições do seu frontend
 app.use(cors());
 
+// --- Implementação do Cache em Memória ---
+const cache = new Map();
+const CACHE_DURATION_MS = 1000 * 60 * 60; // 1 hora
+
 app.get('/api/search', async (req, res) => {
   const { q: query } = req.query;
 
@@ -42,11 +46,33 @@ app.get('/api/search', async (req, res) => {
     const data = await apiResponse.json();
     
     // Mapeia os resultados da API para o formato que nosso frontend espera
-    const results = (data.items || []).map(item => ({
-      title: item.title.replace(/ - Cifra Club$/, '').trim(), // Limpa o título
-      url: item.link
-    }));
+    let results = (data.items || [])
+      // 1. Filtra URLs que são apenas de letras, pois não têm cifras.
+      .filter(item => !item.link.includes('/letra/'))
+      .map(item => {
+        // 2. Limpa o título, removendo sufixos indesejados.
+        const cleanedTitle = item.title
+          .replace(/ - Cifra Club$/, '')
+          .replace(/\(letra da música\)/, '')
+          .replace(/ - (versão simplificada)/, '')
+          .trim();
+        return {
+          title: cleanedTitle,
+          url: item.link
+        };
+      });
 
+    // 3. Remove duplicatas, priorizando a cifra normal sobre a simplificada.
+    // Cria uma URL base (sem 'simplificada.html') para cada item e mantém apenas a primeira ocorrência.
+    const uniqueResults = new Map();
+    results.forEach(item => {
+      const baseUrl = item.url.replace('/simplificada.html', '/');
+      if (!uniqueResults.has(baseUrl)) {
+        uniqueResults.set(baseUrl, item);
+      }
+    });
+    results = Array.from(uniqueResults.values());
+    
     if (results.length === 0) {
       console.log('[DEBUG] A API do Google não retornou resultados.');
     }
@@ -75,28 +101,70 @@ app.get('/api/scrape', async (req, res) => {
     return res.status(400).json({ error: 'A URL fornecida não é do Cifra Club.' });
   }
 
+  // --- VERIFICAÇÃO DO CACHE ---
+  const cachedEntry = cache.get(url);
+  if (cachedEntry && (Date.now() - cachedEntry.timestamp < CACHE_DURATION_MS)) {
+    console.log(`[CACHE] Servindo do cache para a URL: ${url}`);
+    return res.json(cachedEntry.data);
+  }
+
   try {
     console.log(`[DEBUG] Raspando conteúdo da URL: ${url}`);
 
-    // Otimização: Usar fetch em vez de Puppeteer para obter o conteúdo da página
-    const response = await fetch(url);
+    // ATUALIZAÇÃO CRÍTICA: O Cifra Club bloqueia requisições sem um User-Agent de navegador.
+    // Para simular um navegador real e evitar o bloqueio, adicionamos cabeçalhos à requisição.
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
+      }
+    });
+
     if (!response.ok) {
       throw new Error(`Erro ao carregar a página da cifra: ${response.statusText}`);
     }
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    // Extrai o ID do vídeo do YouTube, se existir
+    // --- NOVA LÓGICA PARA EXTRAIR O videoId ---
+    // O Cifra Club agora armazena os metadados da página, incluindo o videoId,
+    // em um objeto JavaScript (cifra_object) dentro de uma tag <script>.
+    // --- LÓGICA DEFINITIVA PARA EXTRAIR O videoId (LEVE E EFICIENTE) ---
+    // O Cifra Club (Next.js) embute os dados da página, incluindo o videoId,
+    // em uma tag <script id="__NEXT_DATA__"> como um JSON.
     let videoId = null;
-    const iframeSrc = $('iframe[src*="youtube.com/embed/"]').attr('src');
-    if (iframeSrc) {
-      const urlParts = iframeSrc.split('/');
-      // Pega a última parte da URL (o ID) e remove quaisquer parâmetros de query
-      videoId = urlParts[urlParts.length - 1].split('?')[0];
+    const scriptTag = $('script:contains("var cifra_object")').html();
+    const nextDataScript = $('#__NEXT_DATA__').html();
+
+    if (scriptTag) {
+      // Isola a string JSON do conteúdo do script
+      // ATUALIZAÇÃO: Adicionado o flag 's' (dotAll) na regex para que o '.'
+      // também corresponda a quebras de linha. Isso corrige a falha na captura
+      // de objetos JSON que se estendem por múltiplas linhas.
+      const jsonStringMatch = scriptTag.match(/var cifra_object\s*=\s*(\{.*?\});/s);
+      if (jsonStringMatch && jsonStringMatch[1]) {
+        try {
+          const cifraObject = JSON.parse(jsonStringMatch[1]);
+          // Acessa o ID do vídeo, se ele existir no objeto
+          videoId = cifraObject?.video?.videoId || null;
+        } catch (e) {
+          console.error('Erro ao fazer parse do JSON do cifra_object:', e);
+        }
+    if (nextDataScript) {
+      try {
+        const nextData = JSON.parse(nextDataScript);
+        // O videoId está aninhado dentro da estrutura de props da página.
+        // Usamos optional chaining (?.) para navegar com segurança.
+        videoId = nextData?.props?.pageProps?.video?.videoId || null;
+      } catch (e) {
+        console.error('Erro ao fazer parse do JSON do __NEXT_DATA__:', e);
+      }
     }
 
     // 1. Tenta encontrar o conteúdo da cifra (tag <pre>)
     const cifraContent = $('pre').html();
+
+    let responseData = null;
 
     if (cifraContent) {
       // Se encontrou a cifra, retorna o conteúdo
@@ -104,13 +172,13 @@ app.get('/api/scrape', async (req, res) => {
       const song = $('h1.t1').text();
       
 
-      res.json({
+      responseData = {
         type: 'cifra',
         artist: artist,
         song: song,
         content: cifraContent,
         videoId: videoId // Adiciona o ID do vídeo à resposta
-      });
+      };
     } else {
       // 2. Se não encontrou, tenta encontrar uma lista de músicas (página de artista)
       const songsList = [];
@@ -123,11 +191,19 @@ app.get('/api/scrape', async (req, res) => {
 
       if (songsList.length > 0) {
         const artistName = $('h1.t1').text();
-        res.json({ type: 'artist', artist: artistName, songs: songsList });
+        responseData = { type: 'artist', artist: artistName, songs: songsList };
       } else {
         // 3. Se não encontrou nem cifra nem lista de músicas, retorna o erro
         res.status(404).json({ error: 'Nenhum conteúdo de cifra ou lista de músicas foi encontrado na página.' });
+        return; // Encerra a execução para não cachear o erro
       }
+    }
+
+    // --- ARMAZENAMENTO NO CACHE ---
+    if (responseData) {
+      cache.set(url, { data: responseData, timestamp: Date.now() });
+      console.log(`[CACHE] Armazenado no cache para a URL: ${url}`);
+      res.json(responseData);
     }
 
   } catch (error) {
