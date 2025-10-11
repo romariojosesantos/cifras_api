@@ -126,36 +126,22 @@ app.get('/api/scrape', async (req, res) => {
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    // --- NOVA LÓGICA PARA EXTRAIR O videoId ---
-    // O Cifra Club agora armazena os metadados da página, incluindo o videoId,
-    // em um objeto JavaScript (cifra_object) dentro de uma tag <script>.
     // --- LÓGICA DEFINITIVA PARA EXTRAIR O videoId (LEVE E EFICIENTE) ---
     // O Cifra Club (Next.js) embute os dados da página, incluindo o videoId,
     // em uma tag <script id="__NEXT_DATA__"> como um JSON.
     let videoId = null;
-    const scriptTag = $('script:contains("var cifra_object")').html();
     const nextDataScript = $('#__NEXT_DATA__').html();
 
-    if (scriptTag) {
-      // Isola a string JSON do conteúdo do script
-      // ATUALIZAÇÃO: Adicionado o flag 's' (dotAll) na regex para que o '.'
-      // também corresponda a quebras de linha. Isso corrige a falha na captura
-      // de objetos JSON que se estendem por múltiplas linhas.
-      const jsonStringMatch = scriptTag.match(/var cifra_object\s*=\s*(\{.*?\});/s);
-      if (jsonStringMatch && jsonStringMatch[1]) {
-        try {
-          const cifraObject = JSON.parse(jsonStringMatch[1]);
-          // Acessa o ID do vídeo, se ele existir no objeto
-          videoId = cifraObject?.video?.videoId || null;
-        } catch (e) {
-          console.error('Erro ao fazer parse do JSON do cifra_object:', e);
-        }
     if (nextDataScript) {
       try {
         const nextData = JSON.parse(nextDataScript);
         // O videoId está aninhado dentro da estrutura de props da página.
-        // Usamos optional chaining (?.) para navegar com segurança.
-        videoId = nextData?.props?.pageProps?.video?.videoId || null;
+        // --- LÓGICA ROBUSTA ---
+        // O Cifra Club tem variações na estrutura. O vídeo pode estar em `pageProps.video`
+        // ou aninhado em `pageProps.songData.video`. Este código tenta ambos os caminhos.
+        const pageProps = nextData?.props?.pageProps;
+        videoId = pageProps?.video?.youtube_id || pageProps?.songData?.video?.youtube_id || null;
+
       } catch (e) {
         console.error('Erro ao fazer parse do JSON do __NEXT_DATA__:', e);
       }
