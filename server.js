@@ -13,6 +13,11 @@ const PORT = process.env.PORT || 3001;
 // Habilita o CORS para permitir requisições do seu frontend
 app.use(cors());
 
+// Rota de verificação para confirmar se o deploy funcionou
+app.get('/', (req, res) => {
+  res.json({ message: 'API Online', version: '1.1.0' });
+});
+
 // --- Implementação do Cache em Memória ---
 const cache = new Map();
 const CACHE_DURATION_MS = 1000 * 60 * 60; // 1 hora
