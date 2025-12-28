@@ -1,6 +1,15 @@
 // Carrega as variáveis de ambiente do arquivo .env
 require('dotenv').config();
 
+// --- TRATAMENTO DE ERROS GLOBAIS ---
+// Captura erros que poderiam derrubar o servidor (causando 502)
+process.on('uncaughtException', (err) => {
+  console.error('ERRO CRÍTICO (uncaughtException):', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('ERRO CRÍTICO (unhandledRejection):', reason);
+});
+
 const express = require('express');
 const cheerio = require('cheerio');
 const cors = require('cors');
@@ -14,12 +23,13 @@ const PORT = process.env.PORT || 3001;
 
 // Habilita o CORS para permitir requisições do seu frontend
 app.use(cors());
+app.options('*', cors()); // Garante que requisições OPTIONS (preflight) sejam tratadas corretamente
 // Habilita o parsing de JSON no corpo das requisições (Necessário para POST/PUT)
 app.use(express.json());
 
 // Rota de verificação para confirmar se o deploy funcionou
 app.get('/', (req, res) => {
-  res.json({ message: 'API Online', version: '1.1.0' });
+  res.json({ message: 'API Online', version: '1.2.0' });
 });
 
 // --- SISTEMA DE AUTENTICAÇÃO E FAVORITOS (EM MEMÓRIA) ---
