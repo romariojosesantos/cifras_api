@@ -97,10 +97,16 @@ app.get('/api/favorites', authenticateToken, (req, res) => {
 
 // 4. Adicionar Favorito (Rota Protegida)
 app.post('/api/favorites', authenticateToken, (req, res) => {
-  const { song, artist, url } = req.body;
+  let { song, artist, url, title } = req.body;
   
-  if (!song || !artist || !url) {
-    return res.status(400).json({ error: 'Dados da cifra incompletos.' });
+  // Compatibilidade: Se vier da busca, pode ter 'title' em vez de 'song' e 'artist'
+  if (!song && title) {
+    song = title;
+    artist = artist || 'Desconhecido';
+  }
+  
+  if (!song || !url) {
+    return res.status(400).json({ error: 'Dados da cifra (nome ou url) incompletos.' });
   }
 
   const userFavorites = favorites[req.user.id] || [];
