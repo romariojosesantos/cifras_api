@@ -85,7 +85,7 @@ app.get('/api/search', async (req, res) => {
   }
 });
 
-app.get('/api/scrape', async (req, res) => {
+app.get('/api/cifra', async (req, res) => {
   let { url } = req.query;
 
   if (!url) {
@@ -148,7 +148,15 @@ app.get('/api/scrape', async (req, res) => {
     }
 
     // 1. Tenta encontrar o conteúdo da cifra (tag <pre>)
-    const cifraContent = $('pre').html();
+    // --- CONVERSÃO PARA CHORDPRO ---
+    // Substitui as tags <b>Acorde</b> por [Acorde] e extrai o texto puro.
+    const pre = $('pre');
+    if (pre.length) {
+      pre.find('b').each((_, el) => {
+        $(el).replaceWith(`[${$(el).text()}]`);
+      });
+    }
+    const cifraContent = pre.length ? pre.text() : null;
 
     let responseData = null;
 
