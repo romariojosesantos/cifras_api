@@ -5,6 +5,8 @@ const express = require('express');
 const cheerio = require('cheerio');
 const cors = require('cors');
 const fetch = require('cross-fetch'); // Usaremos cross-fetch para requisições mais leves
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 
 const app = express();
 // Usar a porta fornecida pelo ambiente ou 3001 como padrão
@@ -12,10 +14,110 @@ const PORT = process.env.PORT || 3001;
 
 // Habilita o CORS para permitir requisições do seu frontend
 app.use(cors());
+// Habilita o parsing de JSON no corpo das requisições (Necessário para POST/PUT)
+app.use(express.json());
 
 // Rota de verificação para confirmar se o deploy funcionou
 app.get('/', (req, res) => {
   res.json({ message: 'API Online', version: '1.1.0' });
+});
+
+// --- SISTEMA DE AUTENTICAÇÃO E FAVORITOS (EM MEMÓRIA) ---
+// NOTA: Estes dados serão perdidos se o servidor reiniciar.
+// Para produção, substitua por um banco de dados real.
+const users = []; // Armazena usuários: { id, email, password }
+const favorites = {}; // Armazena favoritos por ID de usuário: { userId: [cifras] }
+const JWT_SECRET = process.env.JWT_SECRET || 'chave_secreta_padrao_segura';
+
+// Middleware para verificar o Token JWT
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Formato: "Bearer TOKEN"
+
+  if (!token) return res.status(401).json({ error: 'Acesso negado. Token não fornecido.' });
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: 'Token inválido ou expirado.' });
+    req.user = user; // Adiciona os dados do usuário à requisição
+    next();
+  });
+};
+
+// 1. Registrar Usuário
+app.post('/api/auth/register', async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email e senha são obrigatórios.' });
+  }
+
+  const userExists = users.find(u => u.email === email);
+  if (userExists) {
+    return res.status(409).json({ error: 'Email já cadastrado.' });
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const newUser = { id: users.length + 1, email, password: hashedPassword };
+  users.push(newUser);
+  
+  // Inicializa o array de favoritos para o novo usuário
+  favorites[newUser.id] = [];
+
+  res.status(201).json({ message: 'Usuário registrado com sucesso' });
+});
+
+// 2. Login
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+  const user = users.find(u => u.email === email);
+
+  if (!user || !(await bcrypt.compare(password, user.password))) {
+    return res.status(401).json({ error: 'Credenciais inválidas' });
+  }
+
+  const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
+  res.json({ token, user: { id: user.id, email: user.email } });
+});
+
+// 3. Listar Favoritos (Rota Protegida)
+app.get('/api/favorites', authenticateToken, (req, res) => {
+  const userFavorites = favorites[req.user.id] || [];
+  res.json(userFavorites);
+});
+
+// 4. Adicionar Favorito (Rota Protegida)
+app.post('/api/favorites', authenticateToken, (req, res) => {
+  const { song, artist, url } = req.body;
+  
+  if (!song || !artist || !url) {
+    return res.status(400).json({ error: 'Dados da cifra incompletos.' });
+  }
+
+  const userFavorites = favorites[req.user.id] || [];
+  
+  // Evita duplicatas
+  const exists = userFavorites.some(fav => fav.url === url);
+  if (exists) {
+    return res.status(409).json({ error: 'Esta cifra já está nos favoritos.' });
+  }
+
+  const newFavorite = { song, artist, url, addedAt: new Date() };
+  userFavorites.push(newFavorite);
+  favorites[req.user.id] = userFavorites;
+
+  res.status(201).json({ message: 'Favorito adicionado', favorite: newFavorite });
+});
+
+// 5. Remover Favorito (Rota Protegida)
+app.delete('/api/favorites', authenticateToken, (req, res) => {
+  const { url } = req.body;
+  
+  if (!url) return res.status(400).json({ error: 'URL da cifra é obrigatória.' });
+
+  let userFavorites = favorites[req.user.id] || [];
+  favorites[req.user.id] = userFavorites.filter(fav => fav.url !== url);
+
+  res.json({ message: 'Favorito removido' });
 });
 
 // --- Implementação do Cache em Memória ---
