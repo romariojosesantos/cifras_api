@@ -86,6 +86,7 @@ app.get('/api/search', async (req, res) => {
 });
 
 app.get('/api/cifra', async (req, res) => {
+  console.log(`[DEBUG] Recebida requisição em /api/cifra: ${req.query.url}`);
   let { url } = req.query;
 
   if (!url) {
