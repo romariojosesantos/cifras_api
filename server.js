@@ -1,5 +1,14 @@
 // Carrega as variáveis de ambiente do arquivo .env
-require('dotenv').config();
+const dotenvResult = require('dotenv').config();
+
+if (dotenvResult.error) {
+  console.warn('[AVISO] Erro ao carregar o arquivo .env:', dotenvResult.error.message);
+} else {
+  console.log('[INFO] Arquivo .env carregado com sucesso.');
+}
+console.log('[DEBUG] Status das Chaves:');
+console.log('- GOOGLE_API_KEY:', process.env.GOOGLE_API_KEY ? 'OK (Carregada)' : 'FALTANDO');
+console.log('- SEARCH_ENGINE_ID:', process.env.SEARCH_ENGINE_ID ? 'OK (Carregada)' : 'FALTANDO');
 
 // --- TRATAMENTO DE ERROS GLOBAIS ---
 // Captura erros que poderiam derrubar o servidor (causando 502)
@@ -16,6 +25,7 @@ const cors = require('cors');
 const fetch = require('cross-fetch'); // Usaremos cross-fetch para requisições mais leves
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const mysql = require('mysql2/promise');
 
 const app = express();
 // Usar a porta fornecida pelo ambiente ou 3001 como padrão
@@ -32,11 +42,73 @@ app.get('/', (req, res) => {
   res.json({ message: 'API Online', version: '1.2.0' });
 });
 
-// --- SISTEMA DE AUTENTICAÇÃO E FAVORITOS (EM MEMÓRIA) ---
-// NOTA: Estes dados serão perdidos se o servidor reiniciar.
-// Para produção, substitua por um banco de dados real.
-const users = []; // Armazena usuários: { id, email, password }
-const favorites = {}; // Armazena favoritos por ID de usuário: { userId: [cifras] }
+// --- CONFIGURAÇÃO DO BANCO DE DADOS MYSQL ---
+const dbConfig = {
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '',
+  port: process.env.DB_PORT || 3306,
+};
+const dbName = process.env.DB_NAME || 'cifras_db';
+
+const pool = mysql.createPool({
+  ...dbConfig,
+  database: dbName,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+});
+
+// Inicializa as tabelas do banco de dados
+const initDB = async () => {
+  try {
+    // 1. Cria o banco de dados se não existir
+    const tempConnection = await mysql.createConnection(dbConfig);
+    await tempConnection.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
+    await tempConnection.end();
+
+    const connection = await pool.getConnection();
+    try {
+      // Tabela de Usuários
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          email VARCHAR(255) NOT NULL UNIQUE,
+          password VARCHAR(255) NOT NULL
+        )
+      `);
+      // Tabela de Favoritos
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS favorites (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          user_id INT NOT NULL,
+          song VARCHAR(255) NOT NULL,
+          artist VARCHAR(255) NOT NULL,
+          url VARCHAR(255) NOT NULL,
+          added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          UNIQUE KEY unique_fav (user_id, url)
+        )
+      `);
+      // Tabela de Cache de Cifras
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS cifra_cache (
+          url VARCHAR(500) PRIMARY KEY,
+          data JSON NOT NULL,
+          timestamp BIGINT NOT NULL
+        )
+      `);
+      console.log('Banco de dados MySQL inicializado e tabelas verificadas.');
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Erro ao conectar ou inicializar o banco de dados:', error);
+  }
+};
+
+initDB();
+
 const JWT_SECRET = process.env.JWT_SECRET || 'chave_secreta_padrao_segura';
 
 // Middleware para verificar o Token JWT
@@ -61,42 +133,58 @@ app.post('/api/auth/register', async (req, res) => {
     return res.status(400).json({ error: 'Email e senha são obrigatórios.' });
   }
 
-  const userExists = users.find(u => u.email === email);
-  if (userExists) {
-    return res.status(409).json({ error: 'Email já cadastrado.' });
+  try {
+    // Verifica se usuário já existe
+    const [existingUsers] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+    if (existingUsers.length > 0) {
+      return res.status(409).json({ error: 'Email já cadastrado.' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    // Insere novo usuário
+    await pool.query('INSERT INTO users (email, password) VALUES (?, ?)', [email, hashedPassword]);
+
+    res.status(201).json({ message: 'Usuário registrado com sucesso' });
+  } catch (error) {
+    console.error('Erro no registro:', error);
+    res.status(500).json({ error: 'Erro interno ao registrar usuário.' });
   }
-
-  const hashedPassword = await bcrypt.hash(password, 10);
-  const newUser = { id: users.length + 1, email, password: hashedPassword };
-  users.push(newUser);
-  
-  // Inicializa o array de favoritos para o novo usuário
-  favorites[newUser.id] = [];
-
-  res.status(201).json({ message: 'Usuário registrado com sucesso' });
 });
 
 // 2. Login
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
-  const user = users.find(u => u.email === email);
+  
+  try {
+    const [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+    const user = rows[0];
 
-  if (!user || !(await bcrypt.compare(password, user.password))) {
-    return res.status(401).json({ error: 'Credenciais inválidas' });
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({ error: 'Credenciais inválidas' });
+    }
+
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
+    res.json({ token, user: { id: user.id, email: user.email } });
+  } catch (error) {
+    console.error('Erro no login:', error);
+    res.status(500).json({ error: 'Erro interno ao realizar login.' });
   }
-
-  const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
-  res.json({ token, user: { id: user.id, email: user.email } });
 });
 
 // 3. Listar Favoritos (Rota Protegida)
-app.get('/api/favorites', authenticateToken, (req, res) => {
-  const userFavorites = favorites[req.user.id] || [];
-  res.json(userFavorites);
+app.get('/api/favorites', authenticateToken, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM favorites WHERE user_id = ? ORDER BY added_at DESC', [req.user.id]);
+    res.json(rows);
+  } catch (error) {
+    console.error('Erro ao buscar favoritos:', error);
+    res.status(500).json({ error: 'Erro ao buscar favoritos.' });
+  }
 });
 
 // 4. Adicionar Favorito (Rota Protegida)
-app.post('/api/favorites', authenticateToken, (req, res) => {
+app.post('/api/favorites', authenticateToken, async (req, res) => {
   let { song, artist, url, title } = req.body;
   
   // Compatibilidade: Se vier da busca, pode ter 'title' em vez de 'song' e 'artist'
@@ -109,35 +197,42 @@ app.post('/api/favorites', authenticateToken, (req, res) => {
     return res.status(400).json({ error: 'Dados da cifra (nome ou url) incompletos.' });
   }
 
-  const userFavorites = favorites[req.user.id] || [];
-  
-  // Evita duplicatas
-  const exists = userFavorites.some(fav => fav.url === url);
-  if (exists) {
-    return res.status(409).json({ error: 'Esta cifra já está nos favoritos.' });
+  try {
+    // Verifica duplicatas
+    const [existing] = await pool.query('SELECT * FROM favorites WHERE user_id = ? AND url = ?', [req.user.id, url]);
+    if (existing.length > 0) {
+      return res.status(409).json({ error: 'Esta cifra já está nos favoritos.' });
+    }
+
+    // Insere
+    const [result] = await pool.query(
+      'INSERT INTO favorites (user_id, song, artist, url) VALUES (?, ?, ?, ?)',
+      [req.user.id, song, artist, url]
+    );
+
+    const newFavorite = { id: result.insertId, song, artist, url, added_at: new Date() };
+    res.status(201).json({ message: 'Favorito adicionado', favorite: newFavorite });
+  } catch (error) {
+    console.error('Erro ao adicionar favorito:', error);
+    res.status(500).json({ error: 'Erro ao salvar favorito.' });
   }
-
-  const newFavorite = { song, artist, url, addedAt: new Date() };
-  userFavorites.push(newFavorite);
-  favorites[req.user.id] = userFavorites;
-
-  res.status(201).json({ message: 'Favorito adicionado', favorite: newFavorite });
 });
 
 // 5. Remover Favorito (Rota Protegida)
-app.delete('/api/favorites', authenticateToken, (req, res) => {
+app.delete('/api/favorites', authenticateToken, async (req, res) => {
   const { url } = req.body;
   
   if (!url) return res.status(400).json({ error: 'URL da cifra é obrigatória.' });
 
-  let userFavorites = favorites[req.user.id] || [];
-  favorites[req.user.id] = userFavorites.filter(fav => fav.url !== url);
-
-  res.json({ message: 'Favorito removido' });
+  try {
+    await pool.query('DELETE FROM favorites WHERE user_id = ? AND url = ?', [req.user.id, url]);
+    res.json({ message: 'Favorito removido' });
+  } catch (error) {
+    console.error('Erro ao remover favorito:', error);
+    res.status(500).json({ error: 'Erro ao remover favorito.' });
+  }
 });
 
-// --- Implementação do Cache em Memória ---
-const cache = new Map();
 const CACHE_DURATION_MS = 1000 * 60 * 60; // 1 hora
 
 app.get('/api/search', async (req, res) => {
@@ -148,32 +243,33 @@ app.get('/api/search', async (req, res) => {
   }
 
   try {
-    // --- MUDANÇA: Usar a API do Google Custom Search em vez de raspar o HTML ---
+    // --- MUDANÇA: Usar a API do Google Custom Search ---
     const apiKey = process.env.GOOGLE_API_KEY;
     const searchEngineId = process.env.SEARCH_ENGINE_ID;
 
     if (!apiKey || !searchEngineId) {
-      throw new Error('As variáveis de ambiente GOOGLE_API_KEY e SEARCH_ENGINE_ID não foram configuradas.');
+      console.error('GOOGLE_API_KEY ou SEARCH_ENGINE_ID não configurados.');
+      return res.status(500).json({ error: 'Configuração da API do Google ausente no servidor.' });
     }
 
     const apiUrl = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${searchEngineId}&q=${encodeURIComponent(query)}&num=10`;
     console.log(`[DEBUG] Buscando na API do Google: ${apiUrl}`);
 
-    const apiResponse = await fetch(apiUrl); // Renomeado para evitar conflito
-    if (!apiResponse.ok) {
-      const errorData = await apiResponse.json();
+    const response = await fetch(apiUrl);
+
+    if (!response.ok) {
+      const errorData = await response.json();
       console.error('[ERROR] Erro da API do Google:', errorData);
-      throw new Error(`Erro ao buscar na API do Google: ${apiResponse.statusText}`);
+      throw new Error(`Erro na API do Google: ${response.statusText}`);
     }
-    
-    const data = await apiResponse.json();
-    
-    // Mapeia os resultados da API para o formato que nosso frontend espera
+
+    const data = await response.json();
+
+    // Mapeia os resultados da API do Google
     let results = (data.items || [])
-      // 1. Filtra URLs que são apenas de letras, pois não têm cifras.
-      .filter(item => !item.link.includes('/letra/'))
+      .filter(item => !item.link.includes('/letra/')) // Filtra letras, queremos cifras
       .map(item => {
-        // 2. Limpa o título, removendo sufixos indesejados.
+        // Limpa o título
         const cleanedTitle = item.title
           .replace(/ - Cifra Club$/, '')
           .replace(/\(letra da música\)/, '')
@@ -185,8 +281,7 @@ app.get('/api/search', async (req, res) => {
         };
       });
 
-    // 3. Remove duplicatas, priorizando a cifra normal sobre a simplificada.
-    // Cria uma URL base (sem 'simplificada.html') para cada item e mantém apenas a primeira ocorrência.
+    // Remove duplicatas (ex: simplificada vs normal)
     const uniqueResults = new Map();
     results.forEach(item => {
       const baseUrl = item.url.replace('/simplificada.html', '/');
@@ -194,17 +289,16 @@ app.get('/api/search', async (req, res) => {
         uniqueResults.set(baseUrl, item);
       }
     });
-    results = Array.from(uniqueResults.values());
     
-    if (results.length === 0) {
-      console.log('[DEBUG] A API do Google não retornou resultados.');
-    }
-
-    res.json(results);
+    res.json(Array.from(uniqueResults.values()));
 
   } catch (error) {
     console.error('Erro ao fazer a busca:', error);
-    res.status(500).json({ error: 'Ocorreu um erro ao buscar os resultados.', details: error.message });
+    // BLINDAGEM: Se der erro, retorna lista vazia para não quebrar o frontend com erro 500
+    if (!res.headersSent) res.json([{
+      title: `[DEBUG] Erro Interno: ${error.message}`,
+      url: '#'
+    }]);
   }
 });
 
@@ -226,10 +320,18 @@ app.get('/api/cifra', async (req, res) => {
   }
 
   // --- VERIFICAÇÃO DO CACHE ---
-  const cachedEntry = cache.get(url);
-  if (cachedEntry && (Date.now() - cachedEntry.timestamp < CACHE_DURATION_MS)) {
-    console.log(`[CACHE] Servindo do cache para a URL: ${url}`);
-    return res.json(cachedEntry.data);
+  try {
+    const [rows] = await pool.query('SELECT * FROM cifra_cache WHERE url = ?', [url]);
+    if (rows.length > 0) {
+      const cachedEntry = rows[0];
+      if (Date.now() - cachedEntry.timestamp < CACHE_DURATION_MS) {
+        console.log(`[CACHE HIT] Servindo do banco de dados para: ${url}`);
+        return res.json(cachedEntry.data); // mysql2 converte JSON automaticamente
+      }
+    }
+  } catch (err) {
+    console.error('Erro ao consultar cache:', err);
+    // Continua para o scraping se o cache falhar
   }
 
   try {
@@ -319,8 +421,16 @@ app.get('/api/cifra', async (req, res) => {
 
     // --- ARMAZENAMENTO NO CACHE ---
     if (responseData) {
-      cache.set(url, { data: responseData, timestamp: Date.now() });
-      console.log(`[CACHE] Armazenado no cache para a URL: ${url}`);
+      try {
+        // Salva ou atualiza no banco (Upsert)
+        await pool.query(
+          'INSERT INTO cifra_cache (url, data, timestamp) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE data = ?, timestamp = ?',
+          [url, JSON.stringify(responseData), Date.now(), JSON.stringify(responseData), Date.now()]
+        );
+        console.log(`[CACHE SAVE] Salvo no banco para: ${url}`);
+      } catch (err) {
+        console.error('Erro ao salvar no cache:', err);
+      }
       res.json(responseData);
     }
 
