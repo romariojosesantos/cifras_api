@@ -542,17 +542,35 @@ app.get('/api/cifra', async (req, res) => {
     const pathSegments = parsedUrl.pathname.split('/').filter(Boolean);
     const isArtistUrl = pathSegments.length === 1;
 
+    let html = '';
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0'
       }
     });
 
-    if (!response.ok && !isArtistUrl) {
+    if (response.ok) {
+      html = await response.text();
+    } else {
+      try {
+        const jinaRes = await fetch(`https://r.jina.ai/${url}`, {
+          headers: {
+            'X-Return-Format': 'html',
+            'User-Agent': 'Mozilla/5.0'
+          }
+        });
+        if (jinaRes.ok) {
+          html = await jinaRes.text();
+        }
+      } catch (jinaErr) {
+        console.warn('Falha fallback Jina HTML:', jinaErr.message);
+      }
+    }
+
+    if (!html && !isArtistUrl) {
       throw new Error(`Erro ao carregar a página da cifra: ${response.statusText}`);
     }
 
-    const html = response.ok ? await response.text() : '';
     const $ = cheerio.load(html);
 
     // Extrai videoId (de __NEXT_DATA__ ou scripts do Next App Router)
