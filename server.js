@@ -756,8 +756,19 @@ app.get('/api/cifra', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Servidor da API rodando na porta ${PORT}`);
+// Serve o frontend React compilado caso a pasta build exista
+const BUILD_PATH = path.join(__dirname, '..', 'cifraclub-search-ui', 'build');
+if (fs.existsSync(BUILD_PATH)) {
+  app.use(express.static(BUILD_PATH));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(BUILD_PATH, 'index.html'));
+  });
+  console.log(`[FRONTEND] Servindo build do React em http://0.0.0.0:${PORT}`);
+}
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Servidor da API rodando em todas as interfaces na porta ${PORT}`);
 });
 
 module.exports = app;
