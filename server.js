@@ -69,19 +69,21 @@ let useMySQL = false;
 
 // --- CONFIGURAÇÃO DO BANCO DE DADOS MYSQL ---
 const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  port: process.env.DB_PORT || 3306,
+  host: process.env.DB_HOST || '31.97.83.209',
+  user: process.env.DB_USER || 'romariosantos',
+  password: process.env.DB_PASSWORD || 'RomarioSantos2025',
+  port: Number(process.env.DB_PORT) || 3306,
 };
-const dbName = process.env.DB_NAME || 'cifras_db';
+const dbName = process.env.DB_NAME || 'db_cifra';
 
 const pool = mysql.createPool({
   ...dbConfig,
   database: dbName,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  queueLimit: 0,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000
 });
 
 const initDB = async () => {
@@ -109,6 +111,19 @@ const initDB = async () => {
           added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
           UNIQUE KEY unique_fav (user_id, url)
+        )
+      `);
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS playlists (
+          id VARCHAR(100) NOT NULL,
+          user_id INT NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          description TEXT,
+          items LONGTEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (user_id, id),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
       `);
       await connection.query(`
@@ -279,6 +294,165 @@ app.delete('/api/favorites', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Erro ao remover favorito:', error);
     res.status(500).json({ error: 'Erro ao remover favorito.' });
+  }
+});
+
+// --- PLAYLISTS DO USUÁRIO (SINCRONIZAÇÃO EM NUVEM) ---
+// 6. Listar Playlists
+app.get('/api/playlists', authenticateToken, async (req, res) => {
+  try {
+    if (useMySQL) {
+      const [rows] = await pool.query(
+        'SELECT id, name, description, items, created_at, updated_at FROM playlists WHERE user_id = ? ORDER BY updated_at DESC',
+        [req.user.id]
+      );
+      const playlists = rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        description: r.description || '',
+        items: typeof r.items === 'string' ? JSON.parse(r.items || '[]') : (r.items || []),
+        createdAt: r.created_at,
+        updatedAt: r.updated_at
+      }));
+      return res.json(playlists);
+    } else {
+      const list = (localDB.playlists || []).filter(p => p.user_id === req.user.id);
+      return res.json(list);
+    }
+  } catch (error) {
+    console.error('Erro ao buscar playlists:', error);
+    const list = (localDB.playlists || []).filter(p => p.user_id === req.user.id);
+    return res.json(list);
+  }
+});
+
+// 7. Criar / Atualizar Playlist
+app.post('/api/playlists', authenticateToken, async (req, res) => {
+  const { id, name, description, items, createdAt, updatedAt } = req.body;
+  if (!id || !name) {
+    return res.status(400).json({ error: 'ID e nome da playlist são obrigatórios.' });
+  }
+
+  const itemsJson = typeof items === 'string' ? items : JSON.stringify(Array.isArray(items) ? items : []);
+  const now = new Date();
+
+  try {
+    if (useMySQL) {
+      await pool.query(
+        `INSERT INTO playlists (id, user_id, name, description, items, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           name = VALUES(name),
+           description = VALUES(description),
+           items = VALUES(items),
+           updated_at = VALUES(updated_at)`,
+        [id, req.user.id, name.trim(), description || '', itemsJson, createdAt ? new Date(createdAt) : now, updatedAt ? new Date(updatedAt) : now]
+      );
+      return res.status(200).json({
+        id,
+        name: name.trim(),
+        description: description || '',
+        items: JSON.parse(itemsJson),
+        updatedAt: updatedAt || now.toISOString()
+      });
+    } else {
+      if (!localDB.playlists) localDB.playlists = [];
+      const idx = localDB.playlists.findIndex(p => p.id === id && p.user_id === req.user.id);
+      const record = {
+        id,
+        user_id: req.user.id,
+        name: name.trim(),
+        description: description || '',
+        items: JSON.parse(itemsJson),
+        createdAt: createdAt || now.toISOString(),
+        updatedAt: updatedAt || now.toISOString()
+      };
+      if (idx >= 0) {
+        localDB.playlists[idx] = record;
+      } else {
+        localDB.playlists.unshift(record);
+      }
+      saveLocalDB(localDB);
+      return res.status(200).json(record);
+    }
+  } catch (error) {
+    console.error('Erro ao salvar playlist:', error);
+    return res.status(500).json({ error: 'Erro ao salvar playlist.' });
+  }
+});
+
+// 8. Sincronização em Massa (Sync Bidirecional Inteligente)
+app.post('/api/playlists/sync', authenticateToken, async (req, res) => {
+  const { localPlaylists } = req.body;
+  try {
+    if (useMySQL) {
+      const [cloudRows] = await pool.query(
+        'SELECT id, name, description, items, created_at, updated_at FROM playlists WHERE user_id = ?',
+        [req.user.id]
+      );
+      const cloudMap = new Map();
+      cloudRows.forEach(r => {
+        cloudMap.set(r.id, {
+          id: r.id,
+          name: r.name,
+          description: r.description || '',
+          items: typeof r.items === 'string' ? JSON.parse(r.items || '[]') : (r.items || []),
+          createdAt: r.created_at,
+          updatedAt: r.updated_at
+        });
+      });
+
+      if (Array.isArray(localPlaylists)) {
+        for (const localPl of localPlaylists) {
+          if (!localPl || !localPl.id) continue;
+          const cloudPl = cloudMap.get(localPl.id);
+
+          const localTime = new Date(localPl.updatedAt || 0).getTime();
+          const cloudTime = cloudPl ? new Date(cloudPl.updatedAt || 0).getTime() : 0;
+
+          // Se a nuvem não tiver ou a versão local for mais recente (ou a nuvem estiver vazia e o local tiver músicas)
+          if (!cloudPl || localTime > cloudTime || (localPl.items?.length > 0 && (!cloudPl.items || cloudPl.items.length === 0))) {
+            const itemsJson = JSON.stringify(Array.isArray(localPl.items) ? localPl.items : []);
+            await pool.query(
+              `INSERT INTO playlists (id, user_id, name, description, items, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE
+                 name = VALUES(name),
+                 description = VALUES(description),
+                 items = VALUES(items),
+                 updated_at = VALUES(updated_at)`,
+              [localPl.id, req.user.id, localPl.name || 'Nova Playlist', localPl.description || '', itemsJson, new Date(localPl.createdAt || Date.now()), new Date(localPl.updatedAt || Date.now())]
+            );
+            cloudMap.set(localPl.id, localPl);
+          }
+        }
+      }
+
+      const merged = Array.from(cloudMap.values());
+      return res.json({ playlists: merged });
+    } else {
+      return res.json({ playlists: localPlaylists || [] });
+    }
+  } catch (error) {
+    console.error('Erro ao sincronizar playlists:', error);
+    return res.status(500).json({ error: 'Erro ao sincronizar playlists.' });
+  }
+});
+
+// 9. Deletar Playlist
+app.delete('/api/playlists/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (useMySQL) {
+      await pool.query('DELETE FROM playlists WHERE user_id = ? AND id = ?', [req.user.id, id]);
+    } else if (localDB.playlists) {
+      localDB.playlists = localDB.playlists.filter(p => !(p.user_id === req.user.id && p.id === id));
+      saveLocalDB(localDB);
+    }
+    res.json({ message: 'Playlist removida com sucesso' });
+  } catch (error) {
+    console.error('Erro ao deletar playlist:', error);
+    res.status(500).json({ error: 'Erro ao deletar playlist.' });
   }
 });
 
